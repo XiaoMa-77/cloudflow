@@ -1,0 +1,6 @@
+backend/.venv/
+admin/node_modules/
+tmp/
+backend/instance/
+__pycache__/
+*.py[cod]
