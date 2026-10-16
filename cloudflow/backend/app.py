@@ -57,4 +57,10 @@ def create_app():
 app = create_app()
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=8080, debug=True)
+    # exclude_patterns: 排除所有 site-packages，避免第三方包文件变化触发 reload 中断 AI 分析任务
+    app.run(
+        host='0.0.0.0',
+        port=8080,
+        debug=True,
+        exclude_patterns=['*site-packages*'],
+    )

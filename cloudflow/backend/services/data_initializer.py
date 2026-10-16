@@ -1,6 +1,7 @@
 from datetime import datetime
 
 from sqlalchemy import text
+from sqlalchemy.exc import OperationalError
 
 from extensions import db
 from models import ActivityRecord, AdminUser, AiAnalysisRecord, FavoriteRecord, FileNode, FileRecord, RecycleRecord, ShareRecord, User, TodoItem, LongTermTask, PasswordEntry
@@ -9,7 +10,15 @@ from services.user_portal import recalculate_user_storage
 
 
 def init_database():
-    db.create_all()
+    # gunicorn 多 worker 同时启动时 create_all 可能竞态（一个已建表、另一个再建报 already exists），重试即可
+    for attempt in range(3):
+        try:
+            db.create_all()
+            break
+        except OperationalError as exc:
+            if attempt == 2 or 'already exists' not in str(exc):
+                raise
+            db.session.rollback()
     _patch_sqlite_schema()
     _upgrade_plaintext_passwords()
 

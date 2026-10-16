@@ -2,6 +2,7 @@ import secrets
 import random
 import string
 from io import BytesIO
+from pathlib import Path
 from flask import Blueprint, g, request, session, send_file
 
 from extensions import db
@@ -17,6 +18,28 @@ except ImportError:
     PIL_AVAILABLE = False
 
 bp = Blueprint('auth', __name__, url_prefix='/api/auth')
+
+# 验证码字体：随项目分发的开源字体（DejaVu 许可，可自由使用），
+# 避免 Linux 服务器缺少 arial.ttf 时退化为 ~10px 点阵字体导致字符过小
+_FONT_FILE = Path(__file__).resolve().parent.parent / 'assets' / 'fonts' / 'DejaVuSans.ttf'
+_CAPTCHA_FONT_SIZE = 26
+
+
+def _load_captcha_font():
+    """按确定性顺序加载验证码字体，保证跨平台一致的字号。
+
+    Windows 上 truetype('arial') 可用，但 Linux 无此字体；而
+    load_default() 不带 size 时返回约 10px 的点阵字体，字符过小。
+    """
+    if _FONT_FILE.exists():
+        try:
+            return ImageFont.truetype(str(_FONT_FILE), _CAPTCHA_FONT_SIZE)
+        except OSError:
+            pass
+    try:
+        return ImageFont.load_default(_CAPTCHA_FONT_SIZE)  # Pillow >= 10.1 矢量字体
+    except TypeError:
+        return ImageFont.load_default()  # 旧版 Pillow 兜底
 
 
 def generate_captcha():
@@ -44,13 +67,8 @@ def generate_captcha():
         y = random.randint(0, height - 1)
         draw.point((x, y), fill=(random.randint(0, 255), random.randint(0, 255), random.randint(0, 255)))
     
-    # 绘制验证码文本
-    try:
-        # 尝试使用系统字体
-        font = ImageFont.truetype('arial', 24)
-    except:
-        # 如果系统字体不可用，使用默认字体
-        font = ImageFont.load_default()
+    # 绘制验证码文本（跨平台一致字号）
+    font = _load_captcha_font()
     
     for i, char in enumerate(code):
         x = 20 + i * 25

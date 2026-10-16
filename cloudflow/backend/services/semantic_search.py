@@ -274,10 +274,11 @@ def rag_answer(user_id: int, query: str, results: list[dict]) -> str:
         context_blocks.append(block)
         used_chars += len(block)
 
+    context_text = '\n\n'.join(context_blocks)  # 兼容 Python 3.9：避免 f-string 内嵌套同引号
     prompt = (
         '你是云盘文件的智能助手。请仅依据下面给出的云盘文件片段，用简体中文回答用户的问题。'
         '如果片段不足以回答，请直接说明没有找到相关内容。回答末尾请列出引用的文件名。\n\n'
-        f'文件片段：\n{"\n\n".join(context_blocks)}\n\n'
+        f'文件片段：\n{context_text}\n\n'
         f'用户问题：{query}'
     )
 
