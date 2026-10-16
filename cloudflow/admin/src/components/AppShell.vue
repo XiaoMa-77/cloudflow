@@ -4,7 +4,7 @@
       <div class="brand">
         <div class="brand-mark">☁</div>
         <div>
-          <div class="brand-title">智能云盘系统</div>
+          <div class="brand-title">CloudFlow</div>
           <div class="brand-subtitle">{{ subtitle }}</div>
         </div>
       </div>

@@ -30,7 +30,7 @@ def create_app():
 
     @app.get('/api/health')
     def health():
-        return jsonify({'code': 200, 'message': 'ok', 'data': {'service': '2026030303'}})
+        return jsonify({'code': 200, 'message': 'ok', 'data': {'service': 'cloudflow'}})
 
     @app.get('/')
     def index():

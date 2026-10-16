@@ -4,7 +4,7 @@
       <div class="brand">
         <div class="brand-mark">☁</div>
         <div>
-          <div class="brand-title">智能云盘系统</div>
+          <div class="brand-title">CloudFlow</div>
           <div class="brand-subtitle">用户端</div>
         </div>
       </div>
@@ -41,7 +41,7 @@
     <div class="main-panel">
       <header class="topbar">
         <div class="topbar-left">
-          <div class="topbar-badge">智能云盘系统 · 用户工作区</div>
+          <div class="topbar-badge">CloudFlow · 用户工作区</div>
           <h1 class="topbar-title">{{ title }}</h1>
           <p class="topbar-description">{{ description }}</p>
         </div>
