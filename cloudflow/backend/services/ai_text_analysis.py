@@ -147,7 +147,7 @@ def analyze_document_text(file_name: str, text: str) -> str:
 
     payload = {
         'model': Config.AI_MODEL,
-        'max_tokens': 1500,  # 提升令牌上限以支持更详细的报告
+        'max_tokens': 8000,  # 需覆盖思维链与报告两部分（kimi-k2.6 为思考型模型）
         'messages': [
             {'role': 'system', 'content': system_prompt},
             {'role': 'user', 'content': user_prompt},
@@ -210,7 +210,7 @@ def analyze_image_file(file_name: str, storage_rel_path: str) -> str:
 
     payload = {
         'model': Config.AI_VISION_MODEL,
-        'max_tokens': 1500,
+        'max_tokens': 8000,  # 需覆盖思维链与回答两部分（kimi-k2.6 为思考型模型）
         'messages': [
             {
                 'role': 'user',

@@ -43,22 +43,31 @@ def current_embedding_model_id() -> str:
     return _LOCAL_EMBED_MODEL_ID
 
 
-def embed_texts(texts: list[str]) -> list[list[float]]:
-    """向量化入口：优先外部 API，未配置时使用内置本地向量化。"""
+def embed_texts(texts: list[str], kind: str = 'db') -> list[list[float]]:
+    """向量化入口：优先外部 API，未配置时使用内置本地向量化。
+
+    kind: 'db'（索引入库）/ 'query'（检索查询），
+    仅 MiniMax embo-01 这类非对称向量模型区分，OpenAI 兼容服务忽略该参数。
+    """
     if _remote_embedding_enabled():
-        return _request_remote_embeddings(texts)
+        return _request_remote_embeddings(texts, kind)
     return [_local_embed_text(text) for text in texts]
 
 
-def _request_remote_embeddings(texts: list[str]) -> list[list[float]]:
+def _request_remote_embeddings(texts: list[str], kind: str) -> list[list[float]]:
+    is_minimax = Config.EMBEDDING_PROVIDER == 'minimax'
     vectors: list[list[float]] = []
     for start in range(0, len(texts), _EMBED_BATCH_SIZE):
         batch = [text[:4000] for text in texts[start:start + _EMBED_BATCH_SIZE]]
+        if is_minimax:
+            body = {'model': Config.AI_EMBEDDING_MODEL, 'texts': batch, 'type': kind}
+        else:
+            body = {'model': Config.AI_EMBEDDING_MODEL, 'input': batch}
         try:
             response = requests.post(
                 f'{Config.EMBEDDING_BASE_URL.rstrip("/")}/embeddings',
                 headers={'Authorization': f'Bearer {Config.EMBEDDING_API_KEY}'},
-                json={'model': Config.AI_EMBEDDING_MODEL, 'input': batch},
+                json=body,
                 timeout=Config.AI_TIMEOUT_SECONDS,
             )
         except requests.RequestException:
@@ -67,9 +76,18 @@ def _request_remote_embeddings(texts: list[str]) -> list[list[float]]:
         if response.status_code != 200:
             raise SemanticSearchError(f'向量化失败（HTTP {response.status_code}）')
 
-        payload = response.json().get('data') or []
-        ordered = sorted(payload, key=lambda item: item.get('index', 0))
-        vectors.extend([item['embedding'] for item in ordered])
+        payload = response.json()
+        if is_minimax:
+            # MiniMax 业务错误也返回 HTTP 200，需检查 base_resp
+            base_resp = payload.get('base_resp') or {}
+            if base_resp.get('status_code'):
+                raise SemanticSearchError(f"向量化失败：{base_resp.get('status_msg') or '服务返回错误'}")
+            batch_vectors = payload.get('vectors') or []
+        else:
+            items = payload.get('data') or []
+            ordered = sorted(items, key=lambda item: item.get('index', 0))
+            batch_vectors = [item['embedding'] for item in ordered]
+        vectors.extend(batch_vectors)
 
     if len(vectors) != len(texts):
         raise SemanticSearchError('向量化返回数量不匹配')
@@ -153,7 +171,7 @@ def index_file_text(user_id: int, node_id: int, text: str) -> int:
         return 0
 
     model_id = current_embedding_model_id()
-    vectors = embed_texts(chunks)
+    vectors = embed_texts(chunks, kind='db')
     for index, (chunk, vector) in enumerate(zip(chunks, vectors)):
         db.session.add(
             EmbeddingChunk(
@@ -192,7 +210,7 @@ def semantic_search(user_id: int, query: str, top_k: int = 8) -> list[dict]:
     if not rows:
         return []
 
-    query_vector = embed_texts([query])[0]
+    query_vector = embed_texts([query], kind='query')[0]
 
     try:
         import numpy as np
@@ -275,7 +293,7 @@ def rag_answer(user_id: int, query: str, results: list[dict]) -> str:
                         {'role': 'system', 'content': '你是一个严谨的云盘内容检索助手，只依据给定材料回答。'},
                         {'role': 'user', 'content': prompt},
                     ],
-                    'max_tokens': 800,
+                    'max_tokens': 4000,  # 需覆盖思维链与回答（kimi-k2.6 为思考型模型）
                 },
                 timeout=Config.AI_TIMEOUT_SECONDS,
             )

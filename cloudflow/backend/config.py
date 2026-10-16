@@ -41,7 +41,7 @@ class Config:
     AI_API_KEY = os.getenv('MOONSHOT_API_KEY', '')
     AI_MODEL = os.getenv('AI_MODEL', 'kimi-k2.6')
     AI_VISION_MODEL = os.getenv('AI_VISION_MODEL', 'kimi-k2.6')
-    AI_TIMEOUT_SECONDS = int(os.getenv('AI_TIMEOUT_SECONDS', '60'))
+    AI_TIMEOUT_SECONDS = int(os.getenv('AI_TIMEOUT_SECONDS', '180'))
     AI_MAX_INPUT_CHARS = int(os.getenv('AI_MAX_INPUT_CHARS', '12000'))
 
     # 向量服务（用于语义搜索）。未配置时自动使用内置本地向量化（特征哈希 n-gram），
@@ -49,6 +49,8 @@ class Config:
     EMBEDDING_BASE_URL = os.getenv('EMBEDDING_BASE_URL', '')
     EMBEDDING_API_KEY = os.getenv('EMBEDDING_API_KEY', '')
     AI_EMBEDDING_MODEL = os.getenv('AI_EMBEDDING_MODEL', '')
+    # 向量服务协议：openai（OpenAI 兼容，默认）/ minimax（原生 texts 格式；embo-01 为非对称模型，入库 db / 检索 query）
+    EMBEDDING_PROVIDER = os.getenv('EMBEDDING_PROVIDER', 'openai')
 
     # 分片上传
     UPLOAD_CHUNK_SIZE = int(os.getenv('UPLOAD_CHUNK_SIZE', str(4 * 1024 * 1024)))
