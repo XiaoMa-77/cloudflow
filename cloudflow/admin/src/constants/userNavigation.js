@@ -8,5 +8,6 @@ export const userNavItems = [
   { label: '我的收藏', path: '/user/favorites', icon: '⭐' },
   { label: '回收站', path: '/user/recycle', icon: '🗑️' },
   { label: 'AI 分析', path: '/user/ai-analysis', icon: '🤖' },
+  { label: '智能搜索', path: '/user/smart-search', icon: '🔎' },
   { label: '个人中心', path: '/user/profile', icon: '👤' },
 ]

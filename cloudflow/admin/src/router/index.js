@@ -13,6 +13,7 @@ const routes = [
   { path: '/user/favorites', component: () => import('@/views/user/FavoritesView.vue'), meta: { role: 'USER' } },
   { path: '/user/recycle', component: () => import('@/views/user/RecycleView.vue'), meta: { role: 'USER' } },
   { path: '/user/ai-analysis', component: () => import('@/views/user/AiAnalysisView.vue'), meta: { role: 'USER' } },
+  { path: '/user/smart-search', component: () => import('@/views/user/SmartSearchView.vue'), meta: { role: 'USER' } },
   { path: '/user/todo', component: () => import('@/views/user/TodoView.vue'), meta: { role: 'USER' } },
   { path: '/user/long-term-tasks', component: () => import('@/views/user/LongTermTaskView.vue'), meta: { role: 'USER' } },
   { path: '/user/passwords', component: () => import('@/views/user/PasswordBookView.vue'), meta: { role: 'USER' } },

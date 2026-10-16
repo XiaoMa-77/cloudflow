@@ -1,7 +1,7 @@
 <template>
   <UserLayout
     title="AI 分析"
-    description="查看文档分析任务进度与结果摘要。支持 txt、doc、docx、md、csv、xls、xlsx、轻量文本型 pdf。"
+    description="文档与图片的智能分析：文档输出结构化摘要，图片由视觉大模型识别内容与文字（OCR），分析后自动建立语义索引。"
     :items="userNavItems"
   >
     <section class="analysis-toolbar card animate-fade-in">
@@ -10,8 +10,8 @@
           <i class="icon-info"></i>
         </div>
         <p>
-          分析文件类型限制：支持 txt、doc、docx、md、csv、xls、xlsx、轻量文本型 pdf。
-          对于无法稳定提取纯文本的 pdf，系统会提示暂不支持内容分析。
+          支持格式：txt、doc、docx、md、csv、xls、xlsx、轻量文本型 pdf，以及 jpg、jpeg、png、gif、webp 图片。
+          图片分析会调用视觉大模型识别场景与图内文字；分析完成后将自动纳入「智能搜索」语义索引。
         </p>
         <div class="status-overview">
           <span class="status-badge total">总任务 {{ records.length }}</span>
@@ -115,11 +115,11 @@ import { ElMessage } from 'element-plus'
 import { marked } from 'marked'
 
 import { fetchAiRecordsApi, runAiAnalysisApi } from '@/api/aiAnalysis'
-import { uploadFileApi } from '@/api/files'
+import { smartUploadFile } from '@/api/uploader'
 import UserLayout from '@/layouts/UserLayout.vue'
 import { userNavItems } from '@/constants/userNavigation'
 
-const SUPPORTED_EXTENSIONS = new Set(['txt', 'doc', 'docx', 'md', 'csv', 'xls', 'xlsx', 'pdf'])
+const SUPPORTED_EXTENSIONS = new Set(['txt', 'doc', 'docx', 'md', 'csv', 'xls', 'xlsx', 'pdf', 'jpg', 'jpeg', 'png', 'gif', 'webp'])
 const analysisUploadRef = ref(null)
 const loading = ref(false)
 const errorText = ref('')
@@ -229,9 +229,9 @@ const handleUploadAndAnalyze = async (event) => {
 
   launching.value = true
   try {
-    const uploaded = await uploadFileApi({ file, parentId: null })
-    await runAiAnalysisApi(uploaded.id)
-    ElMessage.success('分析任务已提交，请稍后刷新查看结果')
+    const { entry, instant } = await smartUploadFile({ file, parentId: null })
+    await runAiAnalysisApi(entry.id)
+    ElMessage.success(instant ? '文件秒传成功，分析任务已提交' : '分析任务已提交，请稍后刷新查看结果')
     await loadRecords()
   } catch (error) {
     ElMessage.warning(error?.message || '上传并分析失败')

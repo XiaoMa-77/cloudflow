@@ -3,7 +3,9 @@ from models.entities import (
     AdminUser,
     AiAnalysisRecord,
     AuthSession,
+    EmbeddingChunk,
     FavoriteRecord,
+    FileBlob,
     FileNode,
     FileRecord,
     LongTermTask,
@@ -11,6 +13,7 @@ from models.entities import (
     RecycleRecord,
     ShareRecord,
     TodoItem,
+    UploadSession,
     User,
 )
 
@@ -23,6 +26,9 @@ __all__ = [
     'ActivityRecord',
     'FileNode',
     'FileRecord',
+    'FileBlob',
+    'EmbeddingChunk',
+    'UploadSession',
     'ShareRecord',
     'RecycleRecord',
     'TodoItem',

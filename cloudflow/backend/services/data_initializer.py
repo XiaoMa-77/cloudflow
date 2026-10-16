@@ -4,12 +4,14 @@ from sqlalchemy import text
 
 from extensions import db
 from models import ActivityRecord, AdminUser, AiAnalysisRecord, FavoriteRecord, FileNode, FileRecord, RecycleRecord, ShareRecord, User, TodoItem, LongTermTask, PasswordEntry
+from services.security import hash_password, is_password_hashed
 from services.user_portal import recalculate_user_storage
 
 
 def init_database():
     db.create_all()
     _patch_sqlite_schema()
+    _upgrade_plaintext_passwords()
 
     legacy_demo_user = User.query.filter_by(username='demo.user').first()
     demo_user = User.query.filter_by(username='user').first()
@@ -20,7 +22,7 @@ def init_database():
     if not demo_user:
         demo_user = User(
             username='user',
-            password='123456',
+            password=hash_password('123456'),
             status='ACTIVE',
             used_space_bytes=6_800_000_000,
             space_limit_bytes=20 * 1024 * 1024 * 1024,
@@ -40,7 +42,7 @@ def init_database():
             db.session.add(
                 User(
                     username=username,
-                    password='123456',
+                    password=hash_password('123456'),
                     status=status,
                     used_space_bytes=used,
                     space_limit_bytes=limit,
@@ -54,7 +56,7 @@ def init_database():
         demo_admin = legacy_demo_admin
 
     if not demo_admin:
-        demo_admin = AdminUser(username='admin', password='123456')
+        demo_admin = AdminUser(username='admin', password=hash_password('123456'))
         db.session.add(demo_admin)
     elif legacy_demo_admin and legacy_demo_admin.id != demo_admin.id:
         db.session.delete(legacy_demo_admin)
@@ -437,6 +439,7 @@ def _patch_sqlite_schema():
         {
             'mime_type': "TEXT NOT NULL DEFAULT ''",
             'storage_rel_path': "TEXT NOT NULL DEFAULT ''",
+            'content_hash': "TEXT NOT NULL DEFAULT ''",
         },
     )
     _ensure_columns(
@@ -445,8 +448,30 @@ def _patch_sqlite_schema():
             'extension': "TEXT NOT NULL DEFAULT ''",
             'mime_type': "TEXT NOT NULL DEFAULT ''",
             'storage_rel_path': "TEXT NOT NULL DEFAULT ''",
+            'content_hash': "TEXT NOT NULL DEFAULT ''",
         },
     )
+    _ensure_columns(
+        'embedding_chunk',
+        {
+            'model': "TEXT NOT NULL DEFAULT ''",
+        },
+    )
+
+
+def _upgrade_plaintext_passwords():
+    """历史数据库中的明文密码统一升级为 pbkdf2 哈希。"""
+    upgraded = False
+    for row in User.query.all():
+        if not is_password_hashed(row.password):
+            row.password = hash_password(row.password)
+            upgraded = True
+    for row in AdminUser.query.all():
+        if not is_password_hashed(row.password):
+            row.password = hash_password(row.password)
+            upgraded = True
+    if upgraded:
+        db.session.commit()
 
 
 def _ensure_columns(table_name: str, column_definitions: dict):

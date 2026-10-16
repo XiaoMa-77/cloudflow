@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import base64
 import csv
 import re
+import time
 import zipfile
 from io import StringIO
 from pathlib import Path
@@ -18,6 +20,15 @@ from services.file_manager import FileManagerError
 # ==============================================================================
 
 SUPPORTED_ANALYSIS_EXTENSIONS = {'txt', 'doc', 'docx', 'md', 'csv', 'xls', 'xlsx', 'pdf'}
+IMAGE_ANALYSIS_EXTENSIONS = {'jpg', 'jpeg', 'png', 'gif', 'webp'}
+_IMAGE_MIME_BY_EXTENSION = {
+    'jpg': 'image/jpeg',
+    'jpeg': 'image/jpeg',
+    'png': 'image/png',
+    'gif': 'image/gif',
+    'webp': 'image/webp',
+}
+_MAX_IMAGE_BYTES = 10 * 1024 * 1024
 _PUNCTUATION = r",.;:!?/\-_@#%&*+=|(){}\[\]<>，。！？；：（）《》【】、‘’"
 _TEXT_SEGMENT_RE = re.compile(rf'[\u4e00-\u9fffA-Za-z0-9][\u4e00-\u9fffA-Za-z0-9\s{_PUNCTUATION}]{{5,}}')
 
@@ -72,6 +83,23 @@ def extract_analysis_text(storage_rel_path: str, extension: str) -> str:
     return normalized[: Config.AI_MAX_INPUT_CHARS]
 
 
+def _request_chat_completion(payload: dict) -> dict:
+    """调用对话接口；Kimi 免费档限流约 3 次/分钟，429 时等待后自动重试一次。"""
+    endpoint = f"{Config.AI_BASE_URL.rstrip('/')}/chat/completions"
+    headers = {
+        'Authorization': f'Bearer {Config.AI_API_KEY}',
+        'Content-Type': 'application/json',
+    }
+    response = None
+    for attempt in range(2):
+        response = requests.post(endpoint, json=payload, headers=headers, timeout=Config.AI_TIMEOUT_SECONDS)
+        if response.status_code != 429 or attempt == 1:
+            break
+        time.sleep(10)
+    response.raise_for_status()
+    return response.json()
+
+
 def analyze_document_text(file_name: str, text: str) -> str:
     """
     调用 AI 接口对文档内容进行深度分析与结构化摘要。
@@ -84,12 +112,6 @@ def analyze_document_text(file_name: str, text: str) -> str:
     """
     if not Config.AI_API_KEY:
         raise FileManagerError('AI 服务未配置或繁忙，请稍后重试', code=503)
-
-    endpoint = f"{Config.AI_BASE_URL.rstrip('/')}/chat/completions"
-    headers = {
-        'Authorization': f'Bearer {Config.AI_API_KEY}',
-        'Content-Type': 'application/json',
-    }
 
     # --------------------------------------------------------------------------
     # 高级提示词工程 (Prompt Engineering)
@@ -125,7 +147,6 @@ def analyze_document_text(file_name: str, text: str) -> str:
 
     payload = {
         'model': Config.AI_MODEL,
-        'temperature': 0.2,  # 低温度值确保分析的稳定性和准确性
         'max_tokens': 1500,  # 提升令牌上限以支持更详细的报告
         'messages': [
             {'role': 'system', 'content': system_prompt},
@@ -134,9 +155,7 @@ def analyze_document_text(file_name: str, text: str) -> str:
     }
 
     try:
-        response = requests.post(endpoint, json=payload, headers=headers, timeout=Config.AI_TIMEOUT_SECONDS)
-        response.raise_for_status()
-        data = response.json()
+        data = _request_chat_completion(payload)
 
         content = (
             data.get('choices', [{}])[0]
@@ -147,9 +166,106 @@ def analyze_document_text(file_name: str, text: str) -> str:
 
         if content:
             return content
-    except Exception as exc:
-        # 记录异常日志（实际生产中建议接入 logging 模块）
+    except requests.HTTPError as exc:
+        status_code = exc.response.status_code if exc.response is not None else 0
+        if status_code == 429:
+            raise FileManagerError('AI 服务限流（约 3 次/分钟），请稍后重试', code=503) from exc
         raise FileManagerError('AI 服务响应异常，请稍后重试', code=503) from exc
+    except Exception as exc:
+        raise FileManagerError('AI 服务响应异常，请稍后重试', code=503) from exc
+
+    raise FileManagerError('AI 未返回有效内容，请稍后重试', code=503)
+
+
+# ==============================================================================
+# 多模态图片分析（视觉大模型）
+# ==============================================================================
+
+def analyze_image_file(file_name: str, storage_rel_path: str) -> str:
+    """
+    调用视觉大模型对图片进行内容理解与 OCR，输出结构化中文描述。
+
+    :param file_name: 文件名称
+    :param storage_rel_path: 图片相对存储路径
+    :return: 结构化的图片内容描述（Markdown）
+    :raises FileManagerError: 当文件不支持、过大或视觉服务异常时抛出
+    """
+    if not Config.AI_API_KEY:
+        raise FileManagerError('AI 服务未配置或繁忙，请稍后重试', code=503)
+
+    if not storage_rel_path:
+        raise FileManagerError('该文件缺少可分析内容，请上传后重试', code=409)
+
+    absolute_path = UPLOAD_DIR / Path(storage_rel_path)
+    if not absolute_path.exists() or not absolute_path.is_file():
+        raise FileManagerError('未找到文件内容，请重新上传后再分析', code=404)
+
+    image_bytes = absolute_path.read_bytes()
+    if len(image_bytes) > _MAX_IMAGE_BYTES:
+        raise FileManagerError('图片过大（超过 10MB），暂不支持 AI 分析', code=409)
+
+    extension = Path(file_name).suffix.lstrip('.').lower() or 'png'
+    mime_type = _IMAGE_MIME_BY_EXTENSION.get(extension, 'image/png')
+    data_uri = f'data:{mime_type};base64,{base64.b64encode(image_bytes).decode("ascii")}'
+
+    payload = {
+        'model': Config.AI_VISION_MODEL,
+        'max_tokens': 1500,
+        'messages': [
+            {
+                'role': 'user',
+                'content': [
+                    {
+                        'type': 'image_url',
+                        'image_url': {'url': data_uri},
+                    },
+                    {
+                        'type': 'text',
+                        'text': (
+                            f'请对图片《{file_name}》进行多模态分析，用简体中文按以下结构输出 Markdown：\n\n'
+                            '## 📌 图片概述\n'
+                            '- 用一两句话概括图片内容与场景。\n\n'
+                            '## 🔍 视觉要素\n'
+                            '- 主体对象、人物动作、环境背景等关键要素。\n\n'
+                            '## 📝 文字识别（OCR）\n'
+                            '- 逐条列出图片中出现的所有文字；没有文字则写「无文字内容」。\n\n'
+                            '## 🏷️ 标签建议\n'
+                            '- 给出 5-8 个便于检索的中文标签，用顿号分隔。'
+                        ),
+                    },
+                ],
+            },
+        ],
+    }
+
+    try:
+        data = _request_chat_completion(payload)
+        content = (
+            data.get('choices', [{}])[0]
+            .get('message', {})
+            .get('content', '')
+            .strip()
+        )
+        if content:
+            return content
+    except requests.HTTPError as exc:
+        status_code = exc.response.status_code if exc.response is not None else 0
+        if status_code == 429:
+            raise FileManagerError('视觉 AI 服务限流（约 3 次/分钟），请稍后重试', code=503) from exc
+        if status_code == 403:
+            raise FileManagerError(
+                '视觉模型不可用：当前 Kimi API Key 无权访问视觉模型，'
+                '请在 Kimi 开放平台检查账户余额与模型权限后重试',
+                code=503,
+            ) from exc
+        if status_code == 404:
+            raise FileManagerError(
+                '视觉模型不存在：请确认 AI_VISION_MODEL 配置的模型名在 Kimi 平台可用',
+                code=503,
+            ) from exc
+        raise FileManagerError('视觉 AI 服务响应异常，请稍后重试', code=503) from exc
+    except Exception as exc:
+        raise FileManagerError('视觉 AI 服务响应异常，请稍后重试', code=503) from exc
 
     raise FileManagerError('AI 未返回有效内容，请稍后重试', code=503)
 

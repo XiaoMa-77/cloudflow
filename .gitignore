@@ -1,2 +1,4 @@
 # 项目排除路径
 /cloudflow/admin/dist/
+/cloudflow/admin/node_modules/
+.idea/

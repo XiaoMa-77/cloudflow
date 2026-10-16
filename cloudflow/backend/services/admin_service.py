@@ -7,6 +7,7 @@ from sqlalchemy import desc, func
 from extensions import db
 from models import ActivityRecord, AdminUser, User
 from services.file_manager import FileManagerError
+from services.security import hash_password
 
 
 def get_admin_overview() -> dict:
@@ -123,7 +124,7 @@ def create_admin(username: str, password: str) -> dict:
     if exists:
         raise FileManagerError('管理员账号已存在', code=409)
 
-    admin = AdminUser(username=account, password=passwd)
+    admin = AdminUser(username=account, password=hash_password(passwd))
     db.session.add(admin)
     db.session.commit()
     return {
@@ -160,7 +161,7 @@ def update_admin_password(admin_id: int, new_password: str) -> None:
     if len(passwd) < 6:
         raise FileManagerError('密码长度不能少于 6 位', code=400)
 
-    target.password = passwd
+    target.password = hash_password(passwd)
     db.session.commit()
 
 

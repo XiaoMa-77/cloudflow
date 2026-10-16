@@ -4,9 +4,11 @@ from flask import Blueprint, g, request, send_file
 
 from extensions import db
 from models import FileRecord
+from services.chunk_upload import complete_chunk_upload, init_chunk_upload, save_chunk
 from services.file_manager import (
     FileManagerError,
     batch_delete_nodes,
+    check_instant_upload,
     create_folder,
     create_share,
     delete_node,
@@ -209,6 +211,69 @@ def upload():
         return error(message=exc.message, code=exc.code)
 
     return success(message='文件上传成功', data=data)
+
+
+@bp.post('/upload/check')
+@login_required(role='USER')
+def upload_check():
+    """秒传检查：客户端计算文件 SHA-256，命中已有内容指纹时服务端直接建记录。"""
+    payload = request.get_json(silent=True) or {}
+    try:
+        data = check_instant_upload(
+            g.current_identity['id'],
+            payload.get('parentId'),
+            str(payload.get('fileName', '')),
+            int(payload.get('fileSize', 0) or 0),
+            str(payload.get('contentHash', '')),
+        )
+    except FileManagerError as exc:
+        return error(message=exc.message, code=exc.code)
+    except (TypeError, ValueError):
+        return error(message='请求参数格式错误', code=400)
+    if data.get('instant'):
+        return success(message='文件秒传成功', data={'instant': True, 'entry': data['entry']})
+    return success(message='未命中秒传，请继续上传', data={'instant': False})
+
+
+@bp.post('/upload/init')
+@login_required(role='USER')
+def upload_init():
+    """初始化分片上传会话，返回已收分片索引用于断点续传。"""
+    payload = request.get_json(silent=True) or {}
+    try:
+        data = init_chunk_upload(g.current_identity['id'], payload)
+    except FileManagerError as exc:
+        return error(message=exc.message, code=exc.code)
+    return success(message='分片上传会话已创建', data=data)
+
+
+@bp.post('/upload/chunk')
+@login_required(role='USER')
+def upload_chunk():
+    upload_token = request.form.get('uploadId', '')
+    chunk_index = request.form.get('chunkIndex', type=int)
+    chunk = request.files.get('chunk')
+    if not upload_token or chunk_index is None or not chunk:
+        return error(message='缺少上传会话或分片数据', code=400)
+    try:
+        data = save_chunk(g.current_identity['id'], upload_token, chunk_index, chunk.read())
+    except FileManagerError as exc:
+        return error(message=exc.message, code=exc.code)
+    return success(message='分片接收成功', data=data)
+
+
+@bp.post('/upload/complete')
+@login_required(role='USER')
+def upload_complete():
+    payload = request.get_json(silent=True) or {}
+    upload_token = str(payload.get('uploadId', ''))
+    if not upload_token:
+        return error(message='缺少上传会话标识', code=400)
+    try:
+        data = complete_chunk_upload(g.current_identity['id'], upload_token)
+    except FileManagerError as exc:
+        return error(message=exc.message, code=exc.code)
+    return success(message='分片合并完成，文件上传成功', data=data)
 
 
 @bp.get('/nodes/<int:node_id>/download')

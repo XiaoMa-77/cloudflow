@@ -3,6 +3,7 @@ from datetime import datetime
 
 from models.entities import TodoItem, LongTermTask, PasswordEntry
 from services.file_manager import FileManagerError
+from services.security import decrypt_secret, encrypt_secret
 from services.user_portal import get_dashboard, get_user_profile, list_favorites
 from utils.auth import login_required
 from utils.response import error, success
@@ -151,12 +152,12 @@ def delete_long_term_task(task_id):
     db.session.commit()
     return success(message='删除长期任务成功')
 
-# 密码本相关路由
+# 密码本相关路由（密码字段静态加密存储，读取时解密）
 @bp.get('/passwords')
 @login_required(role='USER')
 def get_passwords():
     passwords = PasswordEntry.query.filter_by(user_id=g.current_identity['id']).all()
-    data = [{"id": p.id, "app": p.app, "username": p.username, "password": p.password, "note": p.note} for p in passwords]
+    data = [{"id": p.id, "app": p.app, "username": p.username, "password": decrypt_secret(p.password), "note": p.note} for p in passwords]
     return success(message='获取密码本成功', data=data)
 
 @bp.post('/passwords')
@@ -167,7 +168,7 @@ def create_password():
         user_id=g.current_identity['id'],
         app=data['app'],
         username=data['username'],
-        password=data['password'],
+        password=encrypt_secret(data['password']),
         note=data.get('note', '')
     )
     from extensions import db
@@ -183,6 +184,8 @@ def update_password(password_id):
         return error(message='密码不存在', code=404)
     data = request.json
     for key, value in data.items():
+        if key == 'password':
+            value = encrypt_secret(value)
         setattr(password, key, value)
     from extensions import db
     db.session.commit()

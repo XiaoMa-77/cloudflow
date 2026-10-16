@@ -6,6 +6,7 @@ from flask import Blueprint, g, request, session, send_file
 
 from extensions import db
 from models import AdminUser, AuthSession, User
+from services.security import hash_password, is_password_hashed, verify_password
 from utils.auth import login_required
 from utils.response import error, success
 
@@ -106,7 +107,7 @@ def register():
     if AdminUser.query.filter_by(username=account).first():
         return error(message='账号不可用，请更换后重试', code=409)
 
-    user = User(username=account, password=password, status='ACTIVE')
+    user = User(username=account, password=hash_password(password), status='ACTIVE')
     db.session.add(user)
     db.session.commit()
 
@@ -147,10 +148,14 @@ def login():
 
     user = User.query.filter_by(username=account).first()
     if user:
-        if user.password != password:
+        if not verify_password(user.password, password):
             return error(message='账号或密码错误', code=401)
         if user.status != 'ACTIVE':
             return error(message='账号已被禁用', code=403)
+        if not is_password_hashed(user.password):
+            # 历史明文密码在登录成功后自动升级为哈希存储
+            user.password = hash_password(password)
+            db.session.commit()
 
         token = secrets.token_urlsafe(24)
         db.session.add(AuthSession(token=token, role='USER', user_id=user.id))
@@ -166,7 +171,10 @@ def login():
         )
 
     admin = AdminUser.query.filter_by(username=account).first()
-    if admin and admin.password == password:
+    if admin and verify_password(admin.password, password):
+        if not is_password_hashed(admin.password):
+            admin.password = hash_password(password)
+            db.session.commit()
         token = secrets.token_urlsafe(24)
         db.session.add(AuthSession(token=token, role='ADMIN', admin_user_id=admin.id))
         db.session.commit()
@@ -215,15 +223,15 @@ def change_password():
     identity = g.current_identity
     if identity.get('role') == 'USER':
         user = User.query.filter_by(id=identity['id']).first()
-        if not user or user.password != old_password:
+        if not user or not verify_password(user.password, old_password):
             return error(message='原密码不正确', code=409)
-        user.password = new_password
+        user.password = hash_password(new_password)
         db.session.commit()
         return success(message='密码修改成功', data=None)
 
     admin = AdminUser.query.filter_by(id=identity['id']).first()
-    if not admin or admin.password != old_password:
+    if not admin or not verify_password(admin.password, old_password):
         return error(message='原密码不正确', code=409)
-    admin.password = new_password
+    admin.password = hash_password(new_password)
     db.session.commit()
     return success(message='密码修改成功', data=None)

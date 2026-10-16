@@ -1,0 +1,10 @@
+Flask>=3.0
+Flask-SQLAlchemy>=3.1
+Flask-Cors>=4.0
+requests>=2.31
+werkzeug>=3.0
+numpy>=1.26
+cryptography>=42.0
+pypdf>=4.0
+xlrd>=2.0
+olefile>=0.46

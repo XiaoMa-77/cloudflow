@@ -6,8 +6,12 @@ from sqlalchemy import func
 
 from extensions import db
 from models import ActivityRecord, AiAnalysisRecord, FavoriteRecord, FileNode, RecycleRecord, ShareRecord, User
-from services.ai_text_analysis import analyze_document_text, extract_analysis_text
-from services.file_manager import AI_SUPPORTED_EXTENSIONS, FILE_TYPE_BY_EXTENSION, FileManagerError
+from services.ai_text_analysis import (
+    analyze_document_text,
+    analyze_image_file,
+    extract_analysis_text,
+)
+from services.file_manager import AI_IMAGE_EXTENSIONS, AI_SUPPORTED_EXTENSIONS, FILE_TYPE_BY_EXTENSION, FileManagerError
 
 
 def record_activity(user_id: int, file_name: str, action: str) -> None:
@@ -145,7 +149,7 @@ def run_ai_analysis(user_id: int, node_id: int) -> dict:
 
     extension = (node.extension or '').lower()
     if extension not in AI_SUPPORTED_EXTENSIONS:
-        raise FileManagerError('AI 分析仅支持 txt、doc、docx、md、csv、xls、xlsx、pdf 文件', code=409)
+        raise FileManagerError('AI 分析仅支持 txt、doc、docx、md、csv、xls、xlsx、pdf 及常见图片文件', code=409)
 
     record = AiAnalysisRecord(
         user_id=user_id,
@@ -192,12 +196,27 @@ def process_ai_analysis_task(record_id: int) -> None:
         return
 
     try:
-        text = extract_analysis_text(storage_rel_path=node.storage_rel_path, extension=extension)
-        summary = analyze_document_text(file_name=node.name, text=text)
+        if extension in AI_IMAGE_EXTENSIONS:
+            # 多模态：视觉大模型直接理解图片内容（含 OCR）
+            summary = analyze_image_file(file_name=node.name, storage_rel_path=node.storage_rel_path)
+            index_text = summary
+        else:
+            text = extract_analysis_text(storage_rel_path=node.storage_rel_path, extension=extension)
+            summary = analyze_document_text(file_name=node.name, text=text)
+            index_text = text
+
         record.status = '已完成'
         record.summary = summary
         record.updated_at = datetime.utcnow()
         record_activity(user_id=record.user_id, file_name=node.name, action='完成 AI 分析')
+
+        # 顺带建立/刷新语义索引，供智能搜索使用
+        try:
+            from services.semantic_search import index_file_text
+
+            index_file_text(record.user_id, node.id, index_text)
+        except Exception:
+            pass  # 索引失败不影响分析结果
     except FileManagerError as exc:
         record.status = '失败'
         record.summary = exc.message

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from collections import defaultdict
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -7,13 +8,17 @@ from uuid import uuid4
 
 from sqlalchemy import case, func
 from werkzeug.datastructures import FileStorage
-from werkzeug.utils import secure_filename
 
 from config import UPLOAD_DIR
 from extensions import db
-from models import FavoriteRecord, FileNode, RecycleRecord, ShareRecord, User
+from models import EmbeddingChunk, FavoriteRecord, FileBlob, FileNode, RecycleRecord, ShareRecord, User
 
-AI_SUPPORTED_EXTENSIONS = {'txt', 'doc', 'docx', 'md', 'csv', 'xls', 'xlsx', 'pdf'}
+AI_SUPPORTED_EXTENSIONS = {'txt', 'doc', 'docx', 'md', 'csv', 'xls', 'xlsx', 'pdf', 'jpg', 'jpeg', 'png', 'gif', 'webp'}
+AI_DOCUMENT_EXTENSIONS = {'txt', 'doc', 'docx', 'md', 'csv', 'xls', 'xlsx', 'pdf'}
+AI_IMAGE_EXTENSIONS = {'jpg', 'jpeg', 'png', 'gif', 'webp'}
+BLOB_DIR = UPLOAD_DIR / 'blobs'
+CHUNK_TMP_DIR = UPLOAD_DIR / '.chunks'
+_HASH_HEX_LENGTH = 64
 IMAGE_PREVIEW_EXTENSIONS = {'jpg', 'jpeg', 'png', 'gif', 'webp'}
 VIDEO_PREVIEW_EXTENSIONS = {'mp4', 'webm'}
 PREVIEW_MIME_BY_EXTENSION = {
@@ -199,24 +204,111 @@ def upload_file(user_id: int, parent_id: int | None, upload: FileStorage) -> dic
     if not mime_type:
         mime_type = PREVIEW_MIME_BY_EXTENSION.get(extension, '')
 
-    user_dir = UPLOAD_DIR / f'user_{user_id}'
-    user_dir.mkdir(parents=True, exist_ok=True)
-    storage_file_name = secure_filename(safe_name).strip()
-    if not storage_file_name:
-        fallback_extension = f'.{extension}' if extension else ''
-        storage_file_name = f'file-{uuid4().hex[:8]}{fallback_extension}'
-    storage_name = f'{uuid4().hex}-{storage_file_name}'
-    absolute_path = user_dir / storage_name
+    content_hash, storage_rel_path, _ = _store_blob_from_bytes(file_bytes)
+
+    node = _create_file_node(
+        user_id=user_id,
+        parent=parent,
+        name=safe_name,
+        extension=extension,
+        mime_type=mime_type,
+        size_bytes=size_bytes,
+        storage_rel_path=storage_rel_path,
+        content_hash=content_hash,
+        action='上传文件',
+    )
+    return _serialize_node(node, 0, is_favorite=False)
+
+
+def check_instant_upload(user_id: int, parent_id: int | None, file_name: str, size_bytes: int, content_hash: str) -> dict:
+    """秒传检查：内容指纹命中且物理文件存在时，直接创建文件记录，不再传输数据。"""
+    normalized_hash = (content_hash or '').strip().lower()
+    if len(normalized_hash) != _HASH_HEX_LENGTH:
+        return {'instant': False}
+
+    root = ensure_root_folder(user_id)
+    parent = root if parent_id is None else _get_user_node(user_id, parent_id)
+    if parent.node_type != 'folder':
+        raise FileManagerError('上传目录不存在', code=404)
+
+    blob = FileBlob.query.filter_by(content_hash=normalized_hash).first()
+    if not blob or not blob.storage_rel_path:
+        return {'instant': False}
+
+    absolute_path = UPLOAD_DIR / Path(blob.storage_rel_path)
+    if not absolute_path.exists() or not absolute_path.is_file():
+        return {'instant': False}
+
+    size = int(size_bytes or blob.size_bytes or 0)
+    user = User.query.filter_by(id=user_id).first()
+    if not user:
+        raise FileManagerError('用户不存在', code=404)
+    if user.used_space_bytes + size > user.space_limit_bytes:
+        raise FileManagerError('存储空间不足，上传失败', code=409)
+
+    original_name = _normalize_client_filename(file_name or '') or f'未命名文件-{uuid4().hex[:6]}.bin'
+    safe_name = _resolve_duplicate_name(user_id, parent.id, original_name)
+    extension = _extract_extension(safe_name)
+    blob.ref_count = (blob.ref_count or 0) + 1
+    blob.updated_at = datetime.utcnow()
+
+    node = _create_file_node(
+        user_id=user_id,
+        parent=parent,
+        name=safe_name,
+        extension=extension,
+        mime_type=PREVIEW_MIME_BY_EXTENSION.get(extension, ''),
+        size_bytes=size,
+        storage_rel_path=blob.storage_rel_path,
+        content_hash=normalized_hash,
+        action='秒传文件',
+    )
+    return {'instant': True, 'entry': _serialize_node(node, 0, is_favorite=False)}
+
+
+def _store_blob_from_bytes(file_bytes: bytes) -> tuple[str, str, bool]:
+    """按内容指纹落盘：命中已有 blob 则复用（去重），否则写入 blobs/<xx>/<hash>。"""
+    content_hash = hashlib.sha256(file_bytes).hexdigest()
+    blob = FileBlob.query.filter_by(content_hash=content_hash).first()
+
+    if blob and blob.storage_rel_path:
+        absolute_path = UPLOAD_DIR / Path(blob.storage_rel_path)
+        if absolute_path.exists() and absolute_path.is_file():
+            blob.ref_count = (blob.ref_count or 0) + 1
+            blob.updated_at = datetime.utcnow()
+            return content_hash, blob.storage_rel_path, False
+
+    rel_path = str(Path('blobs') / content_hash[:2] / content_hash)
+    absolute_path = UPLOAD_DIR / Path(rel_path)
+    absolute_path.parent.mkdir(parents=True, exist_ok=True)
     absolute_path.write_bytes(file_bytes)
 
+    if blob:
+        blob.size_bytes = len(file_bytes)
+        blob.storage_rel_path = rel_path
+        blob.updated_at = datetime.utcnow()
+    else:
+        blob = FileBlob(
+            content_hash=content_hash,
+            size_bytes=len(file_bytes),
+            storage_rel_path=rel_path,
+            ref_count=1,
+        )
+        db.session.add(blob)
+    return content_hash, rel_path, True
+
+
+def _create_file_node(user_id: int, parent: FileNode, name: str, extension: str, mime_type: str,
+                      size_bytes: int, storage_rel_path: str, content_hash: str, action: str = '上传文件') -> FileNode:
     node = FileNode(
         user_id=user_id,
         parent_id=parent.id,
         node_type='file',
-        name=safe_name,
+        name=name,
         extension=extension,
         mime_type=mime_type,
-        storage_rel_path=str(Path(f'user_{user_id}') / storage_name),
+        storage_rel_path=storage_rel_path,
+        content_hash=content_hash,
         size_bytes=size_bytes,
         updated_at=datetime.utcnow(),
     )
@@ -224,10 +316,32 @@ def upload_file(user_id: int, parent_id: int | None, upload: FileStorage) -> dic
     from services.user_portal import recalculate_user_storage, record_activity
 
     recalculate_user_storage(user_id)
-    record_activity(user_id=user_id, file_name=safe_name, action='上传文件')
+    record_activity(user_id=user_id, file_name=name, action=action)
     db.session.commit()
+    return node
 
-    return _serialize_node(node, 0, is_favorite=False)
+
+def release_storage_reference(storage_rel_path: str, content_hash: str = '') -> None:
+    """释放一处存储引用：仅在没有任何文件节点/回收站记录再引用该物理文件时才删除。"""
+    if not storage_rel_path:
+        return
+
+    still_referenced = (
+        FileNode.query.filter(FileNode.storage_rel_path == storage_rel_path).first() is not None
+        or RecycleRecord.query.filter(RecycleRecord.storage_rel_path == storage_rel_path).first() is not None
+    )
+    if still_referenced:
+        return
+
+    absolute_path = UPLOAD_DIR / Path(storage_rel_path)
+    if absolute_path.exists() and absolute_path.is_file():
+        absolute_path.unlink(missing_ok=True)
+
+    normalized_hash = (content_hash or '').strip().lower()
+    if normalized_hash:
+        blob = FileBlob.query.filter_by(content_hash=normalized_hash).first()
+        if blob:
+            db.session.delete(blob)
 
 
 def get_download_payload(user_id: int, node_id: int) -> dict:
@@ -346,6 +460,7 @@ def delete_node(user_id: int, node_id: int) -> dict:
                 extension=node.extension or '',
                 mime_type=node.mime_type or '',
                 storage_rel_path=node.storage_rel_path or '',
+                content_hash=node.content_hash or '',
                 size_bytes=node.size_bytes,
                 deleted_at=now,
                 remaining_days=30,
@@ -354,6 +469,9 @@ def delete_node(user_id: int, node_id: int) -> dict:
         recycle_count += 1
 
     FavoriteRecord.query.filter(FavoriteRecord.user_id == user_id, FavoriteRecord.file_node_id.in_(descendants)).delete(
+        synchronize_session=False
+    )
+    EmbeddingChunk.query.filter(EmbeddingChunk.user_id == user_id, EmbeddingChunk.file_node_id.in_(descendants)).delete(
         synchronize_session=False
     )
     FileNode.query.filter(FileNode.user_id == user_id, FileNode.id.in_(descendants)).delete(synchronize_session=False)
@@ -460,6 +578,7 @@ def _copy_subtree(user_id: int, source: FileNode, parent_id: int) -> FileNode:
         extension=source.extension,
         mime_type=source.mime_type,
         storage_rel_path=source.storage_rel_path,
+        content_hash=source.content_hash or '',
         size_bytes=source.size_bytes,
         updated_at=datetime.utcnow(),
     )

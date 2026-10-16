@@ -1,4 +1,5 @@
 from routes.ai_analysis import bp as ai_analysis_bp
+from routes.ai_search import bp as ai_search_bp
 from routes.admin import bp as admin_bp
 from routes.auth import bp as auth_bp
 from routes.files import bp as files_bp
@@ -17,3 +18,4 @@ def register_blueprints(app):
     app.register_blueprint(share_public_bp)
     app.register_blueprint(recycle_bp)
     app.register_blueprint(ai_analysis_bp)
+    app.register_blueprint(ai_search_bp)

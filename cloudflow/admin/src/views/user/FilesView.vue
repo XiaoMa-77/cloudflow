@@ -1,7 +1,7 @@
 <template>
   <UserLayout
     title="文件管理"
-    description="统一管理目录、文件操作与 AI 分析入口（支持 txt、doc、docx、md、csv、xls、xlsx、轻量文本型 pdf）。"
+    description="统一管理目录、文件操作与 AI 分析入口。上传支持秒传、分片断点续传与内容去重；AI 分析支持文档与图片。"
     :items="userNavItems"
   >
     <section class="manager-toolbar card">
@@ -9,6 +9,9 @@
         <div class="top-actions">
           <button type="button" class="back-btn" :disabled="!canGoBack" @click="goBack">返回上级</button>
           <button type="button" class="plain-btn" @click="openUploadDialog">上传文件</button>
+          <button type="button" class="plain-btn" :disabled="uploadTask.active" @click="openMultiUploadDialog">
+            批量上传
+          </button>
           <button type="button" class="plain-btn" @click="createFolder">新建文件夹</button>
           <button type="button" class="plain-btn" :disabled="!selectedSingleFile" @click="downloadSelected">
             下载选中文件
@@ -22,6 +25,7 @@
         </div>
 
         <input ref="uploadInputRef" type="file" class="hidden-input" @change="handleUploadChange" />
+        <input ref="uploadMultiRef" type="file" multiple class="hidden-input" @change="handleMultiUploadChange" />
 
         <div class="breadcrumbs">
           <template v-for="(crumb, index) in breadcrumbs" :key="crumb.id">
@@ -85,6 +89,22 @@
           剪贴板：{{ clipboard.mode === 'copy' ? '复制' : '剪切' }} {{ clipboard.name }}
         </p>
         <p v-else class="clipboard-tip">剪贴板为空</p>
+      </div>
+    </section>
+
+    <section v-if="uploadTask.active || uploadTask.done" class="upload-progress-card card">
+      <div class="progress-head">
+        <span class="progress-name" :title="uploadTask.name">
+          <span class="progress-badge">⬆</span>
+          {{ uploadTask.name }}
+          <small v-if="uploadTask.total > 1" class="progress-count">{{ uploadTask.index }}/{{ uploadTask.total }}</small>
+        </span>
+        <span class="progress-state" :class="uploadTask.phase">
+          {{ uploadTask.phaseText }} · {{ uploadTask.percent }}%
+        </span>
+      </div>
+      <div class="progress-track">
+        <div class="progress-fill" :class="{ instant: uploadTask.phase === 'instant' }" :style="{ width: `${uploadTask.percent}%` }"></div>
       </div>
     </section>
 
@@ -200,15 +220,33 @@ import {
   renameNodeApi,
   shareNodeApi,
   toggleFavoriteApi,
-  uploadFileApi,
 } from '@/api/files'
+import { smartUploadFile } from '@/api/uploader'
 import UserLayout from '@/layouts/UserLayout.vue'
 import { userNavItems } from '@/constants/userNavigation'
 
-const AI_SUPPORTED_EXTENSIONS = new Set(['txt', 'doc', 'docx', 'md', 'csv', 'xls', 'xlsx', 'pdf'])
+const AI_SUPPORTED_EXTENSIONS = new Set(['txt', 'doc', 'docx', 'md', 'csv', 'xls', 'xlsx', 'pdf', 'jpg', 'jpeg', 'png', 'gif', 'webp'])
+const UPLOAD_PHASE_TEXT = {
+  hashing: '计算内容指纹',
+  instant: '秒传完成',
+  uploading: '上传中',
+  merging: '合并分片',
+  done: '上传完成',
+}
 const route = useRoute()
 
 const uploadInputRef = ref(null)
+const uploadMultiRef = ref(null)
+const uploadTask = ref({
+  active: false,
+  done: false,
+  name: '',
+  phase: '',
+  phaseText: '',
+  percent: 0,
+  index: 0,
+  total: 0,
+})
 const currentFolderId = ref(null)
 const entries = ref([])
 const breadcrumbs = ref([])
@@ -385,24 +423,145 @@ const changeSort = () => {
   loadWorkspace(currentFolderId.value)
 }
 
+const resetUploadTask = () => {
+  uploadTask.value = {
+    active: false,
+    done: false,
+    name: '',
+    phase: '',
+    phaseText: '',
+    percent: 0,
+    index: 0,
+    total: 0,
+  }
+}
+
+const openMultiUploadDialog = () => {
+  uploadMultiRef.value?.click()
+}
+
+const uploadFilesSequentially = async (fileList) => {
+  const files = Array.from(fileList || [])
+  if (!files.length) {
+    return
+  }
+
+  uploadTask.value = {
+    active: true,
+    done: false,
+    name: files[0].name,
+    phase: 'hashing',
+    phaseText: UPLOAD_PHASE_TEXT.hashing,
+    percent: 0,
+    index: 1,
+    total: files.length,
+  }
+
+  let successCount = 0
+  let instantCount = 0
+  for (let index = 0; index < files.length; index += 1) {
+    const file = files[index]
+    uploadTask.value.name = file.name
+    uploadTask.value.index = index + 1
+    uploadTask.value.phase = 'hashing'
+    uploadTask.value.phaseText = UPLOAD_PHASE_TEXT.hashing
+    uploadTask.value.percent = 0
+
+    try {
+      const { instant } = await smartUploadFile({
+        file,
+        parentId: currentFolderId.value,
+        onProgress: ({ phase, percent }) => {
+          uploadTask.value.phase = phase
+          uploadTask.value.phaseText = UPLOAD_PHASE_TEXT[phase] || '处理中'
+          uploadTask.value.percent = percent
+        },
+      })
+      successCount += 1
+      if (instant) {
+        instantCount += 1
+      }
+    } catch (error) {
+      ElMessage.warning(`${file.name} 上传失败：${error?.message || '未知错误'}`)
+    }
+  }
+
+  uploadTask.value.active = false
+  uploadTask.value.done = true
+  uploadTask.value.phase = 'done'
+  uploadTask.value.phaseText = UPLOAD_PHASE_TEXT.done
+  uploadTask.value.percent = 100
+
+  if (successCount > 0) {
+    ElMessage.success(
+      `上传完成：成功 ${successCount} 个${instantCount > 0 ? `（秒传 ${instantCount} 个）` : ''}`,
+    )
+    await loadWorkspace(currentFolderId.value)
+  }
+
+  setTimeout(() => {
+    if (uploadTask.value.done && !uploadTask.value.active) {
+      resetUploadTask()
+    }
+  }, 4000)
+}
+
 const handleUploadChange = async (event) => {
   const file = event.target.files?.[0]
+  event.target.value = ''
   if (!file) {
     return
   }
 
   try {
-    await uploadFileApi({
+    uploadTask.value = {
+      active: true,
+      done: false,
+      name: file.name,
+      phase: 'hashing',
+      phaseText: UPLOAD_PHASE_TEXT.hashing,
+      percent: 0,
+      index: 1,
+      total: 1,
+    }
+
+    const { instant } = await smartUploadFile({
       file,
       parentId: currentFolderId.value,
+      onProgress: ({ phase, percent }) => {
+        uploadTask.value.phase = phase
+        uploadTask.value.phaseText = UPLOAD_PHASE_TEXT[phase] || '处理中'
+        uploadTask.value.percent = percent
+      },
     })
-    ElMessage.success('文件上传成功')
+
+    uploadTask.value.active = false
+    uploadTask.value.done = true
+    uploadTask.value.phase = 'done'
+    uploadTask.value.phaseText = UPLOAD_PHASE_TEXT.done
+    uploadTask.value.percent = 100
+
+    ElMessage.success(instant ? '文件秒传成功（内容已去重）' : '文件上传成功')
     await loadWorkspace(currentFolderId.value)
+
+    setTimeout(() => {
+      if (uploadTask.value.done && !uploadTask.value.active) {
+        resetUploadTask()
+      }
+    }, 4000)
   } catch (error) {
+    resetUploadTask()
     ElMessage.warning(error?.message || '文件上传失败')
-  } finally {
-    event.target.value = ''
   }
+}
+
+const handleMultiUploadChange = async (event) => {
+  const files = event.target.files
+  event.target.value = ''
+  if (!files || files.length === 0) {
+    return
+  }
+  await uploadFilesSequentially(files)
 }
 
 const createFolder = async () => {
@@ -1644,5 +1803,84 @@ const onDrop = async (event, item) => {
     padding: 0 8px;
     font-size: 11px;
   }
+}
+
+.upload-progress-card {
+  padding: 14px 18px;
+  margin-top: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border-left: 4px solid #8b5cf6;
+}
+
+.progress-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.progress-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #0f172a;
+  font-size: 14px;
+  font-weight: 600;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.progress-badge {
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  background: linear-gradient(135deg, #ede9fe, #ddd6fe);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+.progress-count {
+  color: #64748b;
+  font-weight: 500;
+}
+
+.progress-state {
+  font-size: 13px;
+  font-weight: 500;
+  color: #4338ca;
+  white-space: nowrap;
+}
+
+.progress-state.instant {
+  color: #059669;
+}
+
+.progress-state.done {
+  color: #16a34a;
+}
+
+.progress-track {
+  height: 8px;
+  border-radius: 999px;
+  background: #e2e8f0;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #8b5cf6, #6d28d9);
+  transition: width 0.3s ease;
+}
+
+.progress-fill.instant {
+  background: linear-gradient(90deg, #34d399, #059669);
 }
 </style>

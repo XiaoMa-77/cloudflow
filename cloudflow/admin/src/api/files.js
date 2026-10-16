@@ -52,6 +52,46 @@ export const uploadFileApi = ({ file, parentId }) => {
   })
 }
 
+// 秒传检查：客户端提供文件 SHA-256，命中内容指纹时服务端直接创建记录
+export const checkInstantUploadApi = ({ fileName, fileSize, contentHash, parentId }) => {
+  return http.post('/files/upload/check', {
+    fileName,
+    fileSize,
+    contentHash,
+    parentId: parentId === undefined || parentId === null ? null : parentId,
+  })
+}
+
+// 初始化分片上传会话（返回已收分片索引，用于断点续传）
+export const initChunkUploadApi = ({ fileName, fileSize, chunkSize, contentHash = '', parentId }) => {
+  return http.post('/files/upload/init', {
+    fileName,
+    fileSize,
+    chunkSize,
+    contentHash,
+    parentId: parentId === undefined || parentId === null ? null : parentId,
+  })
+}
+
+// 上传单个分片
+export const uploadChunkApi = ({ uploadId, chunkIndex, chunk }) => {
+  const formData = new FormData()
+  formData.append('uploadId', uploadId)
+  formData.append('chunkIndex', `${chunkIndex}`)
+  formData.append('chunk', chunk)
+  return http.post('/files/upload/chunk', formData, {
+    headers: {
+      'Content-Type': 'multipart/form-data',
+    },
+    timeout: 120000,
+  })
+}
+
+// 合并分片完成上传
+export const completeChunkUploadApi = ({ uploadId }) => {
+  return http.post('/files/upload/complete', { uploadId })
+}
+
 export const batchDeleteNodesApi = (nodeIds) => {
   return http.post('/files/nodes/batch-delete', { nodeIds })
 }

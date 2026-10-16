@@ -63,6 +63,56 @@ class FileNode(db.Model):
     size_bytes = db.Column(db.Integer, nullable=False, default=0)
     mime_type = db.Column(db.String(128), nullable=False, default='')
     storage_rel_path = db.Column(db.String(512), nullable=False, default='')
+    content_hash = db.Column(db.String(64), nullable=False, default='', index=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class FileBlob(db.Model):
+    """文件内容指纹表：相同内容只落一份物理文件，支撑秒传与去重。"""
+
+    __tablename__ = 'file_blob'
+
+    id = db.Column(db.Integer, primary_key=True)
+    content_hash = db.Column(db.String(64), unique=True, nullable=False, index=True)
+    size_bytes = db.Column(db.Integer, nullable=False, default=0)
+    storage_rel_path = db.Column(db.String(512), nullable=False, default='')
+    ref_count = db.Column(db.Integer, nullable=False, default=0)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class EmbeddingChunk(db.Model):
+    """语义索引分块：文档/图片描述切分后向量化存储，支撑 RAG 检索。"""
+
+    __tablename__ = 'embedding_chunk'
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False, index=True)
+    file_node_id = db.Column(db.Integer, db.ForeignKey('file_node.id'), nullable=False, index=True)
+    chunk_index = db.Column(db.Integer, nullable=False, default=0)
+    chunk_text = db.Column(db.Text, nullable=False, default='')
+    embedding = db.Column(db.LargeBinary, nullable=False, default=b'')
+    dim = db.Column(db.Integer, nullable=False, default=0)
+    model = db.Column(db.String(64), nullable=False, default='', index=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+
+
+class UploadSession(db.Model):
+    """分片上传会话：记录分片接收进度，支撑断点续传。"""
+
+    __tablename__ = 'upload_session'
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False, index=True)
+    upload_token = db.Column(db.String(64), unique=True, nullable=False, index=True)
+    file_name = db.Column(db.String(255), nullable=False)
+    parent_id = db.Column(db.Integer, nullable=True)
+    total_bytes = db.Column(db.Integer, nullable=False, default=0)
+    chunk_size = db.Column(db.Integer, nullable=False, default=0)
+    total_chunks = db.Column(db.Integer, nullable=False, default=0)
+    received_chunks = db.Column(db.Text, nullable=False, default='')
+    status = db.Column(db.String(16), nullable=False, default='UPLOADING', index=True)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -126,6 +176,7 @@ class RecycleRecord(db.Model):
     extension = db.Column(db.String(32), nullable=False, default='')
     mime_type = db.Column(db.String(128), nullable=False, default='')
     storage_rel_path = db.Column(db.String(512), nullable=False, default='')
+    content_hash = db.Column(db.String(64), nullable=False, default='')
     size_bytes = db.Column(db.Integer, nullable=False, default=0)
     deleted_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
     remaining_days = db.Column(db.Integer, nullable=False, default=30)
