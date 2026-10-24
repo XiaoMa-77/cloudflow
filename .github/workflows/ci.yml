@@ -17,10 +17,14 @@ jobs:
           python-version: "3.12"
 
       - name: 安装后端依赖
-        run: pip install -r cloudflow/backend/requirements.txt
+        run: pip install -r cloudflow/backend/requirements.txt pytest
 
       - name: 全量语法检查
         run: python -m compileall -q cloudflow/backend
+
+      - name: 后端测试（安全 / 分片去重 / API 冒烟）
+        run: python -m pytest tests -q
+        working-directory: cloudflow/backend
 
       - name: 应用可导入（路由/模型/服务注册无错误）
         run: python -c "import app; print('routes:', len(list(app.app.url_map.iter_rules())))"
