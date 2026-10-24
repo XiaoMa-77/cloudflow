@@ -7,6 +7,7 @@
 ![Vue](https://img.shields.io/badge/Vue-3-4FC08D?logo=vuedotjs&logoColor=white)
 ![Vite](https://img.shields.io/badge/Vite-7-646CFF?logo=vite&logoColor=white)
 ![SQLite](https://img.shields.io/badge/SQLite-3-003B57?logo=sqlite&logoColor=white)
+[![CI](https://github.com/XiaoMa-77/cloudflow/actions/workflows/ci.yml/badge.svg)](https://github.com/XiaoMa-77/cloudflow/actions/workflows/ci.yml)
 
 CloudFlow 是一个前后端分离的云盘系统，在传统网盘能力（文件管理、分享、回收站、待办）之上，引入了三项核心智能化能力：
 

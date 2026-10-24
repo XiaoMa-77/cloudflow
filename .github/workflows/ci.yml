@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  backend:
+    name: 后端（Flask 可安装可导入）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 安装后端依赖
+        run: pip install -r cloudflow/backend/requirements.txt
+
+      - name: 全量语法检查
+        run: python -m compileall -q cloudflow/backend
+
+      - name: 应用可导入（路由/模型/服务注册无错误）
+        run: python -c "import app; print('routes:', len(list(app.app.url_map.iter_rules())))"
+        working-directory: cloudflow/backend
+
+  frontend:
+    name: 前端（Vue 构建）
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: cloudflow/admin
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: cloudflow/admin/package-lock.json
+
+      - name: 安装依赖
+        run: npm ci
+
+      - name: 生产构建
+        run: npm run build
