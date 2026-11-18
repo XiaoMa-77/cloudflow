@@ -15,6 +15,8 @@ CloudFlow 是一个前后端分离的云盘系统，在传统网盘能力（文�
 - **RAG 语义搜索与智能问答**：文档向量化后支持自然语言检索，并基于检索片段生成带引用的答案
 - **多模态 AI 分析**：文档深度解析 + 图片视觉理解（OCR / 场景描述），分析结果自动进入语义索引
 
+> 设计与架构细节（背景、接口、数据流、边界场景、测试策略）见 [DESIGN.md](DESIGN.md)。
+
 ## 系统架构
 
 ```mermaid
@@ -203,6 +205,18 @@ cloudflow/
 - RAG 问答：基于检索片段生成含引用文件名的答案
 - 多模态：大 PDF 深度分析（1911 字结构化报告）、图片 OCR 与场景描述
 - 安全：哈希升级、密码本加解密 roundtrip、密钥零硬编码
+
+## 测试
+
+后端测试全部离线运行（使用 Flask `test_client` + 临时 SQLite/上传目录，不依赖网络、AI 服务或外部数据库）：
+
+```bash
+cd cloudflow/backend
+pip install -r requirements.txt pytest
+python -m pytest tests -q
+```
+
+覆盖接口冒烟、分片上传与去重秒传、安全哈希/加密、鉴权边界、分享与回收站等场景；CI（`.github/workflows/ci.yml`）在 push/PR 时自动运行后端测试与前端生产构建。
 
 ## 许可
 
